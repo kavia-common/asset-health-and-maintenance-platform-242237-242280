@@ -52,7 +52,6 @@ def get_dashboard(db: Session = Depends(get_db)) -> DashboardOutMVP:
     # (This is MVP heuristic; can be refined.)
     now = _utcnow().date()
     overdue_threshold = now - timedelta(days=180)
-    install_threshold = now - timedelta(days=365)
 
     overdue_maintenance = int(
         db.execute(

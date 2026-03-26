@@ -10,7 +10,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db.deps import get_db

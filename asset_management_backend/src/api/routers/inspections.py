@@ -11,11 +11,10 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from api.db.deps import get_db
-from api.db.models import Alert, AlertSeverity, Asset, Inspection, TimelineEvent, TimelineEventType
+from api.db.models import Asset, Inspection, TimelineEvent, TimelineEventType
 from api.routers._common import clamp_0_100, not_found
 from api.schemas import InspectionCreateMVP, InspectionOutMVP
 from api.services import compute_health_score_mvp, ensure_auto_alert_for_asset_mvp
