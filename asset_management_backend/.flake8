@@ -1,7 +1,14 @@
 [flake8]
-exclude = .git,__pycache__,build,dist,venv
-select = E9,F
 max-line-length = 120
-per-file-ignores =
-    __init__.py:F401
-max-complexity = 18
+extend-ignore =
+    # Black-compatible whitespace around slices; harmless if present.
+    E203,
+    # Line break before binary operator; prefer Black's formatting.
+    W503
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    venv,
+    build,
+    dist

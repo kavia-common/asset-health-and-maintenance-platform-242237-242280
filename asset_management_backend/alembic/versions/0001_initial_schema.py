@@ -1,7 +1,7 @@
 """Initial schema for asset health & maintenance platform.
 
 Revision ID: 0001_initial_schema
-Revises: 
+Revises:
 Create Date: 2026-03-26
 
 """
