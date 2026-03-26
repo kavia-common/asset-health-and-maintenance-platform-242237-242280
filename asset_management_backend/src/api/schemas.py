@@ -1,15 +1,19 @@
 """Pydantic schemas for API requests/responses.
 
-The API uses SQLAlchemy ORM models (api.db.models) and exposes typed request/
-response models here.
+This codebase contains:
+1) Existing richer schemas (auth/RBAC, assets with tags, inspection photos, etc.)
+2) MVP schemas required by Step 03.01 attachment (source of truth)
+
+We keep both sets to avoid breaking future steps; routers for MVP use the *MVP
+classes* below.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from api.db.models import (
     AlertSeverity,
@@ -20,6 +24,10 @@ from api.db.models import (
     WorkOrderStatus,
 )
 
+# -----------------------
+# Generic
+# -----------------------
+
 
 class APIMessage(BaseModel):
     """Simple message response."""
@@ -27,9 +35,148 @@ class APIMessage(BaseModel):
     message: str = Field(..., description="Human-readable message.")
 
 
-# -----------------------
-# Auth / Users
-# -----------------------
+# ============================================================================
+# MVP SCHEMAS (Step 03.01 requirements)
+# ============================================================================
+
+
+class AssetCreateMVP(BaseModel):
+    """MVP: Create asset request."""
+
+    asset_tag: str = Field(..., max_length=64, description="Unique asset identifier/tag.")
+    name: str = Field(..., max_length=200, description="Asset name.")
+    asset_type: Optional[str] = Field(None, max_length=100, description="Type/category.")
+    location: Optional[str] = Field(None, max_length=200, description="Location/site.")
+    installation_date: Optional[date] = Field(None, description="Date installed.")
+    manufacturer: Optional[str] = Field(None, max_length=200, description="Manufacturer name.")
+    last_service_date: Optional[date] = Field(None, description="Last serviced date.")
+    health_score: Optional[float] = Field(
+        None, ge=0, le=100, description="Optional initial health score (defaults to 100)."
+    )
+
+
+class AssetOutMVP(BaseModel):
+    """MVP: Asset response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="Asset id.")
+    asset_tag: str = Field(..., description="Asset identifier/tag.")
+    name: str = Field(..., description="Asset name.")
+    asset_type: Optional[str] = Field(None, description="Type/category.")
+    location: Optional[str] = Field(None, description="Location/site.")
+    installation_date: Optional[date] = Field(None, description="Date installed.")
+    manufacturer: Optional[str] = Field(None, description="Manufacturer name.")
+    last_service_date: Optional[date] = Field(None, description="Last serviced date.")
+    health_score: float = Field(..., ge=0, le=100, description="Computed health score.")
+
+
+class InspectionCreateMVP(BaseModel):
+    """MVP: Create inspection request (internal use; router uses multipart form)."""
+
+    asset_id: int = Field(..., description="Asset id inspected.")
+    condition_rating: int = Field(..., ge=1, le=5, description="Condition rating 1..5.")
+    observations: Optional[str] = Field(None, description="Inspector observations.")
+    photo_path: Optional[str] = Field(None, description="Relative photo path under UPLOAD_DIR.")
+    timestamp: datetime = Field(..., description="Inspection timestamp.")
+    readings: dict[str, Any] = Field(default_factory=dict, description="Optional structured readings.")
+
+
+class InspectionOutMVP(BaseModel):
+    """MVP: Inspection response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="Inspection id.")
+    asset_id: int = Field(..., description="Asset id.")
+    condition_rating: int = Field(..., ge=1, le=5, description="Condition rating 1..5.")
+    observations: Optional[str] = Field(None, description="Observations.")
+    photo_path: Optional[str] = Field(None, description="Relative photo path.")
+    timestamp: datetime = Field(..., description="Timestamp.")
+    readings: dict[str, Any] = Field(default_factory=dict, description="Readings payload.")
+
+
+class AlertOutMVP(BaseModel):
+    """MVP: Alert response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="Alert id.")
+    asset_id: int = Field(..., description="Asset id.")
+    type: str = Field(..., description="Alert type.")
+    priority: str = Field(..., description="Priority string (e.g. high/medium/low).")
+    created_at: datetime = Field(..., description="Creation timestamp.")
+
+
+class WorkOrderCreateFromAlertMVP(BaseModel):
+    """MVP: Create a work order from an existing alert."""
+
+    alert_id: int = Field(..., description="Alert id to create work order for.")
+    description: Optional[str] = Field(None, description="Work order description override.")
+    assignee: Optional[str] = Field(None, description="Assignee name (string for MVP).")
+
+
+class WorkOrderOutMVP(BaseModel):
+    """MVP: Work order response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="Work order id.")
+    asset_id: int = Field(..., description="Asset id.")
+    description: str = Field(..., description="Work description.")
+    status: WorkOrderStatus = Field(..., description="Status.")
+    assignee: Optional[str] = Field(None, description="Assignee.")
+    created_at: datetime = Field(..., description="Created timestamp.")
+    updated_at: datetime = Field(..., description="Updated timestamp.")
+
+
+class WorkOrderStatusPatchMVP(BaseModel):
+    """MVP: Patch work order status request."""
+
+    status: WorkOrderStatus = Field(..., description="New status.")
+
+
+class TimelineEventOutMVP(BaseModel):
+    """MVP: Timeline event response."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int = Field(..., description="Event id.")
+    asset_id: int = Field(..., description="Asset id.")
+    event_type: TimelineEventType = Field(..., description="Event type.")
+    description: str = Field(..., description="Description.")
+    timestamp: datetime = Field(..., description="Timestamp.")
+    inspection_id: Optional[int] = Field(None, description="Inspection id (optional).")
+    alert_id: Optional[int] = Field(None, description="Alert id (optional).")
+    work_order_id: Optional[int] = Field(None, description="Work order id (optional).")
+
+
+class HealthStatusCountsMVP(BaseModel):
+    """MVP: Counts by traffic-light health status."""
+
+    green: int = Field(0, ge=0, description="Count of green assets (>=70).")
+    amber: int = Field(0, ge=0, description="Count of amber assets (40..69).")
+    red: int = Field(0, ge=0, description="Count of red assets (<40).")
+
+
+class DashboardOutMVP(BaseModel):
+    """MVP: Dashboard KPI response."""
+
+    total_assets: int = Field(..., ge=0, description="Total assets.")
+    health_status_counts: HealthStatusCountsMVP = Field(
+        ..., description="Counts of assets by health bucket."
+    )
+    overdue_maintenance: int = Field(
+        ..., ge=0, description="Count of assets overdue for maintenance (heuristic)."
+    )
+    open_work_orders: int = Field(..., ge=0, description="Count of open work orders.")
+
+
+# ============================================================================
+# Existing richer schemas (kept intact for future steps)
+# ============================================================================
+
+
 class UserPublic(BaseModel):
     """User data exposed externally."""
 
@@ -68,11 +215,8 @@ class TokenResponse(BaseModel):
     user: UserPublic = Field(..., description="Current user information.")
 
 
-# -----------------------
-# Assets
-# -----------------------
 class AssetBase(BaseModel):
-    """Common asset fields."""
+    """Common asset fields (richer schema)."""
 
     asset_tag: str = Field(..., max_length=64, description="Unique asset tag/identifier.")
     name: str = Field(..., max_length=200, description="Asset display name.")
@@ -99,7 +243,7 @@ class AssetUpdate(BaseModel):
 
 
 class AssetOut(AssetBase):
-    """Asset response."""
+    """Asset response (richer schema)."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -110,11 +254,8 @@ class AssetOut(AssetBase):
     updated_at: datetime = Field(..., description="Updated timestamp.")
 
 
-# -----------------------
-# Inspections / Photos
-# -----------------------
 class InspectionPhotoOut(BaseModel):
-    """Inspection photo metadata."""
+    """Inspection photo metadata (richer schema)."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -127,7 +268,7 @@ class InspectionPhotoOut(BaseModel):
 
 
 class InspectionBase(BaseModel):
-    """Common inspection fields."""
+    """Common inspection fields (richer schema)."""
 
     asset_id: int = Field(..., description="Asset id inspected.")
     inspection_type: InspectionType = Field(InspectionType.ROUTINE, description="Inspection type.")
@@ -144,7 +285,7 @@ class InspectionCreate(InspectionBase):
 
 
 class InspectionOut(InspectionBase):
-    """Inspection response."""
+    """Inspection response (richer schema)."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -154,11 +295,8 @@ class InspectionOut(InspectionBase):
     photos: list[InspectionPhotoOut] = Field(default_factory=list, description="Associated photos.")
 
 
-# -----------------------
-# Alerts
-# -----------------------
 class AlertBase(BaseModel):
-    """Common alert fields."""
+    """Common alert fields (richer schema)."""
 
     asset_id: int = Field(..., description="Asset id.")
     severity: AlertSeverity = Field(AlertSeverity.MEDIUM, description="Alert severity.")
@@ -184,7 +322,7 @@ class AlertUpdate(BaseModel):
 
 
 class AlertOut(AlertBase):
-    """Alert response."""
+    """Alert response (richer schema)."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -193,11 +331,8 @@ class AlertOut(AlertBase):
     resolved_at: Optional[datetime] = Field(None, description="Resolved timestamp.")
 
 
-# -----------------------
-# Work orders
-# -----------------------
 class WorkOrderBase(BaseModel):
-    """Common work order fields."""
+    """Common work order fields (richer schema)."""
 
     asset_id: int = Field(..., description="Asset id.")
     title: str = Field(..., max_length=200, description="Work order title.")
@@ -225,7 +360,7 @@ class WorkOrderUpdate(BaseModel):
 
 
 class WorkOrderOut(WorkOrderBase):
-    """Work order response."""
+    """Work order response (richer schema)."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -243,11 +378,8 @@ class WorkOrderStatusChange(BaseModel):
     note: Optional[str] = Field(None, description="Optional note describing change.")
 
 
-# -----------------------
-# Timeline / Dashboard
-# -----------------------
 class TimelineEventOut(BaseModel):
-    """Timeline event response."""
+    """Timeline event response (richer schema)."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -264,7 +396,7 @@ class TimelineEventOut(BaseModel):
 
 
 class DashboardMetrics(BaseModel):
-    """Top-level dashboard KPI response."""
+    """Top-level dashboard KPI response (richer schema)."""
 
     total_assets: int = Field(..., ge=0, description="Total assets count.")
     avg_health_score: float = Field(..., ge=0, le=100, description="Average health score.")
@@ -274,7 +406,7 @@ class DashboardMetrics(BaseModel):
 
 
 class DashboardOut(BaseModel):
-    """Dashboard response containing KPIs and prioritized lists."""
+    """Dashboard response containing KPIs and prioritized lists (richer schema)."""
 
     metrics: DashboardMetrics = Field(..., description="Key performance metrics.")
     top_risk_assets: list[AssetOut] = Field(default_factory=list, description="Assets with lowest health.")

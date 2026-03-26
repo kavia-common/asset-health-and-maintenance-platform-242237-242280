@@ -1,17 +1,24 @@
 """SQLAlchemy ORM models for the Asset Health & Maintenance app.
 
-These are the canonical schema definitions used by Alembic migrations.
+NOTE:
+- This repository originally scaffolded a richer schema (users/RBAC, inspection photos table, etc.).
+- Step 03.01 MVP requirements specify a simplified model set and fields.
+- For demo readiness and to match the requirements, we extend existing models with
+  MVP-required columns while keeping existing columns for forward compatibility.
+
+If you regenerate Alembic migrations later, these model definitions will be the source of truth.
 """
 
 from __future__ import annotations
 
 import enum
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -45,7 +52,7 @@ class AssetCriticality(str, enum.Enum):
 
 
 class InspectionType(str, enum.Enum):
-    """Inspection category."""
+    """Inspection category (richer schema)."""
 
     ROUTINE = "routine"
     DETAILED = "detailed"
@@ -53,7 +60,7 @@ class InspectionType(str, enum.Enum):
 
 
 class AlertSeverity(str, enum.Enum):
-    """Alert severity level."""
+    """Alert severity level (richer schema)."""
 
     LOW = "low"
     MEDIUM = "medium"
@@ -62,7 +69,10 @@ class AlertSeverity(str, enum.Enum):
 
 
 class WorkOrderStatus(str, enum.Enum):
-    """Work order lifecycle status."""
+    """Work order lifecycle status.
+
+    For MVP, statuses are simplified but compatible with richer flow.
+    """
 
     OPEN = "open"
     IN_PROGRESS = "in_progress"
@@ -82,7 +92,7 @@ class TimelineEventType(str, enum.Enum):
 
 
 class User(Base):
-    """User accounts (simple auth; password hashing will be implemented in backend step)."""
+    """User accounts (future auth)."""
 
     __tablename__ = "users"
 
@@ -90,7 +100,6 @@ class User(Base):
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True, index=True)
     full_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
-    # Store password hash (not plaintext). Backend will manage hashing/verification.
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
 
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, name="user_role"), nullable=False)
@@ -117,16 +126,16 @@ class User(Base):
 
 
 class Asset(Base):
-    """Assets being monitored for condition-based maintenance."""
+    """Assets being monitored."""
 
     __tablename__ = "assets"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
+    # Existing fields
     asset_tag: Mapped[str] = mapped_column(String(64), nullable=False, unique=True, index=True)
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     asset_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
-
     location: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
 
@@ -136,7 +145,11 @@ class Asset(Base):
         server_default=AssetCriticality.MEDIUM.value,
     )
 
-    # Cached/current computed health score (0-100). Backend will compute/update it.
+    # MVP-required additional fields
+    installation_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+    manufacturer: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    last_service_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
+
     health_score: Mapped[float] = mapped_column(Float, nullable=False, server_default="100")
     last_inspected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
@@ -159,17 +172,20 @@ class Asset(Base):
 
 
 class Inspection(Base):
-    """Inspection records, potentially with photos."""
+    """Inspection records (MVP + richer fields)."""
 
     __tablename__ = "inspections"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
 
-    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True)
+    asset_id: Mapped[int] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     inspector_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
+    # Richer inspection type remains
     inspection_type: Mapped[InspectionType] = mapped_column(
         Enum(InspectionType, name="inspection_type"),
         nullable=False,
@@ -177,17 +193,18 @@ class Inspection(Base):
     )
 
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    # Structured readings/measurements captured during the inspection.
     readings: Mapped[dict] = mapped_column(JSON, nullable=False, server_default="{}")
-
-    # Optional per-inspection health score override/assessment.
     assessed_health_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
+
+    # MVP-required fields
+    condition_rating: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    observations: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    photo_path: Mapped[Optional[str]] = mapped_column(String(512), nullable=True)
+    timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     asset: Mapped["Asset"] = relationship(back_populates="inspections")
     inspector: Mapped[Optional["User"]] = relationship(back_populates="inspections")
@@ -195,7 +212,7 @@ class Inspection(Base):
 
 
 class InspectionPhoto(Base):
-    """Photo references for inspections (file storage is handled by backend; DB stores metadata)."""
+    """Photo references for inspections (richer schema table)."""
 
     __tablename__ = "inspection_photos"
 
@@ -204,7 +221,6 @@ class InspectionPhoto(Base):
         ForeignKey("inspections.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
-    # File is referenced by storage key/path; backend upload module will manage this.
     file_key: Mapped[str] = mapped_column(String(512), nullable=False, unique=True)
     original_filename: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
@@ -217,26 +233,29 @@ class InspectionPhoto(Base):
 
 
 class Alert(Base):
-    """Alerts raised for at-risk assets (predicted or rule-based)."""
+    """Alerts raised for at-risk assets."""
 
     __tablename__ = "alerts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True)
+    asset_id: Mapped[int] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
+    # Richer fields
     severity: Mapped[AlertSeverity] = mapped_column(
         Enum(AlertSeverity, name="alert_severity"),
         nullable=False,
         server_default=AlertSeverity.MEDIUM.value,
     )
-
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False, default="Alert")
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    # Whether the alert is still active; if resolved it is archived but kept for history.
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
 
-    # Optional reference to the work order created to address this alert.
+    # MVP-required fields
+    type: Mapped[str] = mapped_column(String(100), nullable=False, server_default="health_score")
+    priority: Mapped[str] = mapped_column(String(50), nullable=False, server_default="medium")
+
     related_work_order_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("work_orders.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -251,34 +270,36 @@ class Alert(Base):
 
 
 class WorkOrder(Base):
-    """Work orders created for maintenance actions."""
+    """Work orders created for maintenance actions (MVP + richer fields)."""
 
     __tablename__ = "work_orders"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True)
+    asset_id: Mapped[int] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="3")  # 1 high .. 5 low
-
+    # Richer fields
+    title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="3")
     status: Mapped[WorkOrderStatus] = mapped_column(
         Enum(WorkOrderStatus, name="work_order_status"),
         nullable=False,
         server_default=WorkOrderStatus.OPEN.value,
         index=True,
     )
-
     created_by_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
     assigned_to_user_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
     )
-
     due_date: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # MVP-required fields
+    description: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    assignee: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -303,7 +324,7 @@ class WorkOrder(Base):
 
 
 class WorkOrderStatusHistory(Base):
-    """Status history audit trail for work orders."""
+    """Status history audit trail for work orders (richer schema)."""
 
     __tablename__ = "work_order_status_history"
 
@@ -335,12 +356,19 @@ class WorkOrderStatusHistory(Base):
 
 
 class TimelineEvent(Base):
-    """Generic event stream for asset history timeline."""
+    """Generic event stream for asset history timeline.
+
+    Supports:
+    - richer schema (title/message/extra/created_at)
+    - MVP schema (description/timestamp)
+    """
 
     __tablename__ = "timeline_events"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    asset_id: Mapped[int] = mapped_column(ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True)
+    asset_id: Mapped[int] = mapped_column(
+        ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
 
     event_type: Mapped[TimelineEventType] = mapped_column(
         Enum(TimelineEventType, name="timeline_event_type"),
@@ -348,7 +376,6 @@ class TimelineEvent(Base):
         index=True,
     )
 
-    # Optional references for richer UI linking.
     inspection_id: Mapped[Optional[int]] = mapped_column(
         ForeignKey("inspections.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -359,19 +386,21 @@ class TimelineEvent(Base):
         ForeignKey("work_orders.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
-    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Richer fields
+    title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
     message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
     extra: Mapped[dict] = mapped_column(JSON, nullable=False, server_default="{}")
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), index=True
     )
 
+    # MVP-required fields
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    timestamp: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
     asset: Mapped["Asset"] = relationship(back_populates="timeline_events")
 
 
-# Helpful indexes/constraints beyond single-column indexes
 Index("ix_assets_type_location", Asset.asset_type, Asset.location)
 Index("ix_inspections_asset_occurred_at", Inspection.asset_id, Inspection.occurred_at)
 UniqueConstraint("inspection_id", "file_key", name="uq_inspection_photo_inspection_file_key")

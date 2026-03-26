@@ -1,8 +1,14 @@
-"""Business logic services for health scoring, alerting, and timeline events."""
+"""Business logic services for health scoring, alerting, and timeline events.
+
+This module contains:
+- Existing richer (future) logic helpers for timeline and work orders.
+- MVP-required health score calculation (age + days since service + condition rating).
+- MVP-required auto-alert generation when health_score < 40.
+"""
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 
 from sqlalchemy import and_, desc, select
@@ -26,7 +32,6 @@ def _utcnow() -> datetime:
 
 
 def _severity_for_health(score: float) -> AlertSeverity:
-    # Simple deterministic rule set (can evolve later):
     if score <= 30:
         return AlertSeverity.CRITICAL
     if score <= 50:
@@ -47,6 +52,107 @@ def _title_for_health(score: float) -> str:
 
 
 # PUBLIC_INTERFACE
+def compute_health_score_mvp(*, asset: Asset, latest_condition_rating: int) -> float:
+    """Compute a demo-ready health score (0-100).
+
+    Requirements (MVP):
+      - Use age, days since last service, and latest inspection condition_rating.
+
+    Heuristic implementation:
+      - Base score from condition_rating:
+            rating 5 -> 90
+            rating 4 -> 75
+            rating 3 -> 60
+            rating 2 -> 35
+            rating 1 -> 15
+      - Age penalty: -1 per year since installation (capped at 25)
+      - Service penalty: - (days_since_service / 30) (capped at 25)
+      - If last_service_date is missing, treat it as installation_date for penalty.
+      - Clamp to [0, 100]
+
+    Args:
+        asset: Asset ORM entity
+        latest_condition_rating: 1..5
+
+    Returns:
+        float: health score 0..100
+    """
+    rating = int(max(1, min(5, latest_condition_rating)))
+    rating_base = {5: 90.0, 4: 75.0, 3: 60.0, 2: 35.0, 1: 15.0}[rating]
+
+    today = date.today()
+
+    install = getattr(asset, "installation_date", None)
+    last_service = getattr(asset, "last_service_date", None) or install
+
+    age_penalty = 0.0
+    if install:
+        years = max(0.0, (today - install).days / 365.25)
+        age_penalty = min(25.0, years * 1.0)
+
+    service_penalty = 0.0
+    if last_service:
+        months = max(0.0, (today - last_service).days / 30.0)
+        service_penalty = min(25.0, months * 1.0)
+
+    score = rating_base - age_penalty - service_penalty
+    return max(0.0, min(100.0, float(score)))
+
+
+# PUBLIC_INTERFACE
+def ensure_auto_alert_for_asset_mvp(
+    db: Session, *, asset: Asset, health_score: float
+) -> Optional[Alert]:
+    """Ensure an auto-generated alert exists when asset health is red (< 40).
+
+    Requirements:
+      - Generate Alert automatically if health_score < 40
+
+    Strategy:
+      - If health_score < 40: create an active alert if no active auto-alert exists.
+      - If health_score >= 40: do nothing (MVP requirement doesn't mention auto-resolve).
+    """
+    score = float(health_score)
+    if score >= 40.0:
+        return None
+
+    title_prefix = "Auto:"
+    existing = (
+        db.execute(
+            select(Alert).where(
+                and_(
+                    Alert.asset_id == asset.id,
+                    Alert.is_active.is_(True),
+                    Alert.title.like(f"{title_prefix}%"),
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    if existing:
+        # Refresh details for demo clarity
+        existing.priority = "high"
+        existing.type = "health_score"
+        existing.title = f"{title_prefix} Asset health red"
+        existing.description = f"Health score is {score:.1f}/100 (< 40)."
+        return existing
+
+    alert = Alert(
+        asset_id=asset.id,
+        type="health_score",
+        priority="high",
+        title=f"{title_prefix} Asset health red",
+        description=f"Health score is {score:.1f}/100 (< 40).",
+        is_active=True,
+        severity=AlertSeverity.HIGH,
+    )
+    db.add(alert)
+    db.flush()
+    return alert
+
+
+# PUBLIC_INTERFACE
 def create_timeline_event(
     db: Session,
     *,
@@ -61,17 +167,9 @@ def create_timeline_event(
 ) -> TimelineEvent:
     """Create and persist a timeline event for an asset.
 
-    Args:
-        db: SQLAlchemy session.
-        asset_id: asset id.
-        event_type: type enum.
-        title: short title.
-        message: optional message.
-        inspection_id/alert_id/work_order_id: optional foreign refs.
-        extra: optional JSON payload.
-
-    Returns:
-        TimelineEvent persisted entity (pending flush).
+    NOTE: This is the richer (non-MVP) event schema using title/message/extra.
+    The MVP requirement uses a simpler TimelineEvent.description/timestamp model.
+    Both can co-exist because the DB schema in this repo already supports richer events.
     """
     ev = TimelineEvent(
         asset_id=asset_id,
@@ -95,24 +193,7 @@ def recompute_asset_health_and_maybe_alert(
     actor: Optional[User],
     inspection: Optional[Inspection] = None,
 ) -> tuple[float, Optional[Alert]]:
-    """Recompute an asset's health score and create/refresh an auto-alert if needed.
-
-    Rule:
-      - If latest inspection has assessed_health_score, use it as health_score.
-      - Else, keep current score but still update last_inspected_at.
-      - If resulting score <= 70, ensure there is an active auto alert
-        (same title prefix) for this asset.
-      - If score > 70, resolve any active auto health alerts.
-
-    Args:
-        db: SQLAlchemy session.
-        asset: Asset ORM object.
-        actor: Current user (optional, used for event messages).
-        inspection: Optional inspection just created.
-
-    Returns:
-        (new_health_score, alert_created_or_updated_or_None)
-    """
+    """Existing richer health-score recomputation (kept for forward compatibility)."""
     new_score = float(asset.health_score or 100.0)
 
     if inspection is not None:
@@ -120,14 +201,11 @@ def recompute_asset_health_and_maybe_alert(
         if inspection.assessed_health_score is not None:
             new_score = float(inspection.assessed_health_score)
 
-    # Clamp 0-100
     new_score = max(0.0, min(100.0, new_score))
     asset.health_score = new_score
 
     created_or_updated_alert: Optional[Alert] = None
 
-    # Find active health alerts (auto generated) for this asset.
-    # We mark them by a stable title prefix.
     title_prefix = "Auto:"
     q = select(Alert).where(
         and_(
@@ -147,7 +225,6 @@ def recompute_asset_health_and_maybe_alert(
         )
 
         if active_auto_alerts:
-            # Update the most recent existing auto alert.
             alert = active_auto_alerts[0]
             alert.severity = severity
             alert.title = title
@@ -164,7 +241,6 @@ def recompute_asset_health_and_maybe_alert(
             db.add(alert)
             created_or_updated_alert = alert
 
-        # Timeline entry for alert raised/updated
         create_timeline_event(
             db,
             asset_id=asset.id,
@@ -175,7 +251,6 @@ def recompute_asset_health_and_maybe_alert(
             extra={"health_score": new_score, "severity": severity.value},
         )
     else:
-        # Resolve any existing active auto alerts
         now = _utcnow()
         for alert in active_auto_alerts:
             alert.is_active = False
@@ -193,16 +268,8 @@ def set_work_order_status(
     actor: Optional[User],
     note: Optional[str],
 ) -> None:
-    """Set work order status and create timeline event.
-
-    Args:
-        db: SQLAlchemy session
-        work_order: work order ORM
-        to_status: new status
-        actor: current user (optional)
-        note: optional change note
-    """
-    from api.db.models import WorkOrderStatusHistory, TimelineEventType  # local import to avoid cycles
+    """Existing richer work-order status logic (kept for forward compatibility)."""
+    from api.db.models import WorkOrderStatusHistory  # local import to avoid cycles
 
     if work_order.status == to_status:
         return
@@ -231,7 +298,9 @@ def set_work_order_status(
 
 
 # PUBLIC_INTERFACE
-def get_recent_timeline_for_asset(db: Session, *, asset_id: int, limit: int = 50) -> list[TimelineEvent]:
+def get_recent_timeline_for_asset(
+    db: Session, *, asset_id: int, limit: int = 50
+) -> list[TimelineEvent]:
     """Return recent timeline events for an asset."""
     q = (
         select(TimelineEvent)
