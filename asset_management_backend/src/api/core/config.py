@@ -33,3 +33,50 @@ def get_database_url() -> str:
         return url.replace("postgresql://", "postgresql+psycopg2://", 1)
 
     return url
+
+
+# PUBLIC_INTERFACE
+def get_jwt_secret() -> str:
+    """Return the JWT signing secret.
+
+    Env vars:
+        - JWT_SECRET (required)
+
+    Returns:
+        str: secret used for signing/verifying JWTs.
+    """
+    secret = os.getenv("JWT_SECRET")
+    if not secret:
+        raise ValueError("JWT secret not configured. Set JWT_SECRET.")
+    return secret
+
+
+# PUBLIC_INTERFACE
+def get_access_token_exp_minutes() -> int:
+    """Return access token expiry duration in minutes.
+
+    Env vars:
+        - ACCESS_TOKEN_EXPIRE_MINUTES (optional, default 60)
+
+    Returns:
+        int: token expiry in minutes
+    """
+    raw = os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60").strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError("ACCESS_TOKEN_EXPIRE_MINUTES must be an integer.") from exc
+    return max(5, value)
+
+
+# PUBLIC_INTERFACE
+def get_upload_dir() -> str:
+    """Return directory for storing uploaded inspection photos.
+
+    Env vars:
+        - UPLOAD_DIR (optional, default './uploads')
+
+    Returns:
+        str: filesystem path (relative or absolute) for uploads directory.
+    """
+    return os.getenv("UPLOAD_DIR", "./uploads")
