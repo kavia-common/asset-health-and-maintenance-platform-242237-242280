@@ -153,7 +153,13 @@ class Asset(Base):
     health_score: Mapped[float] = mapped_column(Float, nullable=False, server_default="100")
     last_inspected_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
-    metadata: Mapped[dict] = mapped_column(JSON, nullable=False, server_default="{}")
+    # IMPORTANT:
+    # SQLAlchemy's DeclarativeBase defines a class attribute `metadata` (type: MetaData).
+    # Having an ORM-mapped attribute named `metadata` conflicts with that, and mypy flags it.
+    #
+    # We expose the attribute as `asset_metadata` while keeping the underlying DB column
+    # name as "metadata" for backwards compatibility with the existing migration.
+    asset_metadata: Mapped[dict] = mapped_column("metadata", JSON, nullable=False, server_default="{}")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

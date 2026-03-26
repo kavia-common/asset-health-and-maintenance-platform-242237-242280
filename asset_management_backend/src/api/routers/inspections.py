@@ -108,7 +108,10 @@ def create_inspection(
     db.flush()
 
     # Health score update
-    new_score = clamp_0_100(compute_health_score_mvp(asset=asset, latest_condition_rating=ins.condition_rating))
+    # `ins.condition_rating` is Optional[int] at the ORM/model level, but for this MVP endpoint
+    # the form enforces it as a required int. Guard for type-safety and unexpected None.
+    latest_rating = ins.condition_rating if ins.condition_rating is not None else int(condition_rating)
+    new_score = clamp_0_100(compute_health_score_mvp(asset=asset, latest_condition_rating=latest_rating))
     asset.health_score = new_score
 
     # Auto-alert if < 40
